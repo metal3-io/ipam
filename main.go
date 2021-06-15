@@ -18,6 +18,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
@@ -27,9 +28,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
-	"k8s.io/klog"
-	"k8s.io/klog/klogr"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	"k8s.io/klog/v2"
+	"k8s.io/klog/v2/klogr"
+	clusterv1a3 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	// +kubebuilder:scaffold:imports
@@ -38,32 +40,47 @@ import (
 var (
 	myscheme             = runtime.NewScheme()
 	setupLog             = ctrl.Log.WithName("setup")
-	metricsAddr          string
+	metricsBindAddr      string
 	enableLeaderElection bool
 	syncPeriod           time.Duration
 	webhookPort          int
 	healthAddr           string
 	watchNamespace       string
+	webhookCertDir       string
+	watchFilterValue     string
 )
 
 func init() {
 	_ = scheme.AddToScheme(myscheme)
 	_ = ipamv1.AddToScheme(myscheme)
 	_ = clusterv1.AddToScheme(myscheme)
+	_ = clusterv1a3.AddToScheme(myscheme)
 	// +kubebuilder:scaffold:scheme
 }
 
 func main() {
 	klog.InitFlags(nil)
-	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&metricsBindAddr, "metrics-bind-addr", "localhost:8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
 	flag.StringVar(&watchNamespace, "namespace", "",
 		"Namespace that the controller watches to reconcile CAPM3 objects. If unspecified, the controller watches for CAPM3 objects across all namespaces.")
 	flag.DurationVar(&syncPeriod, "sync-period", 10*time.Minute,
 		"The minimum interval at which watched resources are reconciled (e.g. 15m)")
-	flag.IntVar(&webhookPort, "webhook-port", 0,
+	flag.IntVar(&webhookPort, "webhook-port", 9443,
 		"Webhook Server port (set to 0 to disable)")
+	flag.StringVar(
+		&webhookCertDir,
+		"webhook-cert-dir",
+		"/tmp/k8s-webhook-server/serving-certs/",
+		"Webhook cert dir, only used when webhook-port is specified.",
+	)
+	flag.StringVar(
+		&watchFilterValue,
+		"watch-filter",
+		"",
+		fmt.Sprintf("Label value that the controller watches to reconcile cluster-api objects. Label key is always %s. If unspecified, the controller watches for all cluster-api objects.", clusterv1.WatchLabel),
+	)
 	flag.StringVar(&healthAddr, "health-addr", ":9440",
 		"The address the health endpoint binds to.")
 	flag.Parse()
@@ -72,13 +89,14 @@ func main() {
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 myscheme,
-		MetricsBindAddress:     metricsAddr,
+		MetricsBindAddress:     metricsBindAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "controller-leader-election-ipam-capm3",
 		SyncPeriod:             &syncPeriod,
 		Port:                   webhookPort,
 		HealthProbeBindAddress: healthAddr,
 		Namespace:              watchNamespace,
+		CertDir:                webhookCertDir,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -110,25 +128,22 @@ func setupChecks(mgr ctrl.Manager) {
 }
 
 func setupReconcilers(mgr ctrl.Manager) {
-	if webhookPort != 0 {
-		return
-	}
+
+	// Setup the context that's going to be used in controllers and for the manager.
+	ctx := ctrl.SetupSignalHandler()
 
 	if err := (&controllers.IPPoolReconciler{
-		Client:         mgr.GetClient(),
-		ManagerFactory: ipam.NewManagerFactory(mgr.GetClient()),
-		Log:            ctrl.Log.WithName("controllers").WithName("IPPool"),
-	}).SetupWithManager(mgr); err != nil {
+		Client:           mgr.GetClient(),
+		ManagerFactory:   ipam.NewManagerFactory(mgr.GetClient()),
+		Log:              ctrl.Log.WithName("controllers").WithName("IPPool"),
+		WatchFilterValue: watchFilterValue,
+	}).SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "IPPoolReconciler")
 		os.Exit(1)
 	}
 }
 
 func setupWebhooks(mgr ctrl.Manager) {
-	if webhookPort == 0 {
-		return
-	}
-
 	if err := (&ipamv1.IPPool{}).SetupWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "IPPool")
 		os.Exit(1)

@@ -26,12 +26,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/klog"
-	"k8s.io/klog/klogr"
+	"k8s.io/klog/v2"
+	"k8s.io/klog/v2/klogr"
 
 	ipamv1 "github.com/metal3-io/ip-address-manager/api/v1alpha1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha3"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1alpha4"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest/printer"
@@ -79,8 +79,9 @@ func TestAPIs(t *testing.T) {
 		[]Reporter{printer.NewlineReporter{}})
 }
 
-var _ = BeforeSuite(func(done Done) {
-	logf.SetLogger(zap.LoggerTo(GinkgoWriter, true))
+var _ = BeforeSuite(func() {
+	done := make(chan interface{})
+	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
