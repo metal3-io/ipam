@@ -67,7 +67,7 @@ func main() {
 	flag.DurationVar(&syncPeriod, "sync-period", 10*time.Minute,
 		"The minimum interval at which watched resources are reconciled (e.g. 15m)")
 	flag.IntVar(&webhookPort, "webhook-port", 9443,
-		"Webhook Server port (set to 0 to disable)")
+		"Webhook Server port")
 	flag.StringVar(
 		&webhookCertDir,
 		"webhook-cert-dir",
